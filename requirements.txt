@@ -1,0 +1,10 @@
+fastapi
+uvicorn[standard]
+pandas
+matplotlib
+seaborn
+duckdb
+lxml
+html5lib
+python-dotenv
+pydantic

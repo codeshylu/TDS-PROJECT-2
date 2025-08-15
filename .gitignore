@@ -1,0 +1,19 @@
+# Python
+__pycache__/
+*.pyc
+.venv/
+venv/
+.env
+*.ipynb_checkpoints
+
+# Large/binary stuff – keep OUT of git
+*.zip
+*.tar
+*.tar.gz
+*.7z
+*.parquet
+*.csv
+
+# OS/editor
+.DS_Store
+.vscode/
