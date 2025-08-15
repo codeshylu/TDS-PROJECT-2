@@ -8,3 +8,5 @@ lxml
 html5lib
 python-dotenv
 pydantic
+openai
+
