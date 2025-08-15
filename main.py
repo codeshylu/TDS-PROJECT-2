@@ -1,5 +1,3 @@
-# # main.py
-
 from fastapi import FastAPI, HTTPException
 import uvicorn
 import base64
@@ -12,38 +10,32 @@ from pydantic import BaseModel
 from typing import Optional
 from dotenv import load_dotenv
 
-# Load environment variables from .env
+# Load environment variables from .env (local dev only)
 load_dotenv()
+
+# Get API keys (Render env vars take priority)
+openai_api_key = os.getenv("OPENAI_API_KEY") or os.getenv("API_KEY")
+google_api_key = os.getenv("GOOGLE_API_KEY")
+
+# Initialize LLM clients if keys exist
+if openai_api_key:
+    from openai import OpenAI
+    client = OpenAI(api_key=openai_api_key)
+else:
+    print("OpenAI API key not found. Skipping OpenAI client initialization.")
+
+if google_api_key:
+    import google.generativeai as genai
+    genai.configure(api_key=google_api_key)
+    gemini_model = genai.GenerativeModel('gemini-pro')
+else:
+    print("Google API key not found. Skipping Google Gemini initialization.")
 
 # Initialize FastAPI app
 app = FastAPI()
 
-# Get API keys from environment
-openai_api_key = os.getenv("OPENAI_API_KEY") or os.getenv("API_KEY")
-google_api_key = os.getenv("GOOGLE_API_KEY")
-
-# Initialize clients only if keys exist
-client = None
-gemini_model = None
-
-if openai_api_key:
-    try:
-        from openai import OpenAI
-        client = OpenAI(api_key=openai_api_key)
-    except ImportError:
-        print("OpenAI package not installed. Skipping OpenAI client.")
-
-if google_api_key:
-    try:
-        import google.generativeai as genai
-        genai.configure(api_key=google_api_key)
-        gemini_model = genai.GenerativeModel('gemini-pro')
-    except ImportError:
-        print("Google generativeai package not installed. Skipping Google Gemini.")
-
-# Root endpoint
 @app.get("/")
-async def home():
+def home():
     return {"message": "TDS Project 2 API is running"}
 
 # Request body model
@@ -51,13 +43,12 @@ class AnalyzeDataRequest(BaseModel):
     query: str
     data_url: Optional[str] = None
 
-# Main POST endpoint
 @app.post("/analyze_data")
 async def analyze_data(request_data: AnalyzeDataRequest):
-    query = request_data.query
-    data_url = request_data.data_url
-
     try:
+        query = request_data.query
+        data_url = request_data.data_url
+
         if "Scrape the list of highest grossing films from Wikipedia" in query:
             if data_url and "wikipedia.org/wiki/List_of_highest-grossing_films" in data_url:
                 return await handle_wikipedia_films_analysis(query, data_url)
@@ -67,17 +58,18 @@ async def analyze_data(request_data: AnalyzeDataRequest):
             return await handle_indian_high_court_judgments(query)
         else:
             raise HTTPException(status_code=400, detail="Unknown task description. Please provide a supported query.")
+
     except HTTPException:
         raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Error during analysis: {e}")
 
-# Wikipedia films handler
 async def handle_wikipedia_films_analysis(query: str, data_url: str):
     try:
         dfs = pd.read_html(data_url, match='Worldwide gross', header=0)
         if not dfs:
             raise ValueError("No table found with 'Worldwide gross' header.")
+
         df = dfs[0]
         df.columns = df.columns.str.replace(r'\[.*?\]', '', regex=True).str.strip()
         df.rename(columns={'Gross': 'Worldwide gross'}, inplace=True)
@@ -105,3 +97,30 @@ async def handle_wikipedia_films_analysis(query: str, data_url: str):
             line_kws={'color':'red', 'linestyle':'--'}, scatter_kws={'alpha':0.6}
         )
         plt.title('Rank vs Worldwide Gross')
+        plt.xlabel('Rank')
+        plt.ylabel('Worldwide Gross ($)')
+        plt.grid(True, linestyle='--', alpha=0.7)
+
+        buf = io.BytesIO()
+        plt.savefig(buf, format='png', bbox_inches='tight', dpi=100)
+        buf.seek(0)
+        img_base64 = base64.b64encode(buf.getvalue()).decode('utf-8')
+        plt.close()
+
+        return {
+            "query_1_answer": q1,
+            "query_2_answer": earliest_film,
+            "query_3_answer": q3,
+            "plot_image_data_uri": f"data:image/png;base64,{img_base64}"
+        }
+
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Error processing Wikipedia task: {e}")
+
+# Placeholder for Indian high court judgments handler
+async def handle_indian_high_court_judgments(query: str):
+    return {"message": "Indian high court judgments handler not implemented yet."}
+
+if __name__ == "__main__":
+    uvicorn.run(app, host="0.0.0.0", port=int(os.environ.get("PORT", 10000)))
+
