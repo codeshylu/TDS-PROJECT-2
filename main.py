@@ -18,6 +18,9 @@ load_dotenv() # <--- ADD THIS CALL
 
 # Initialize FastAPI app
 app = FastAPI()
+@app.get("/")
+def home():
+    return {"message": "TDS Project 2 API is running"}
 
 # --- NEW: Define the request body structure using Pydantic BaseModel ---
 class AnalyzeDataRequest(BaseModel):
