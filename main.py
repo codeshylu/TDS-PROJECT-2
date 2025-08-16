@@ -8,14 +8,10 @@ import requests
 
 app = FastAPI()
 
-# --- Root route ---
-@app.get("/")
-async def root():
-    return {"message": "API is live. Use /analyze_data to POST your queries."}
-
 # --- Helper to scrape Wikipedia table ---
 def scrape_highest_grossing_films(url: str) -> pd.DataFrame:
     try:
+        # Use requests + BeautifulSoup to fetch page content
         response = requests.get(url)
         if response.status_code != 200:
             raise HTTPException(status_code=500, detail=f"Failed to fetch URL: {response.status_code}")
@@ -60,40 +56,32 @@ async def analyze_data(request: Request):
 
         df = scrape_highest_grossing_films(data_url)
 
-        # --- Question 1 ---
-        if "2 bn" in query and "before 2000" in query:
-            count = len(df[(df["Gross"] >= 2_000_000_000) & (df["Year"] < 2000)])
-            return [count]
+        # --- Count of movies ≥ $2bn before 2000 ---
+        count_2bn_before_2000 = int(len(df[(df["Gross"] >= 2_000_000_000) & (df["Year"] < 2000)]))
 
-        # --- Question 2 ---
-        elif "earliest" in query and "1.5 bn" in query:
-            film = df[df["Gross"] >= 1_500_000_000].sort_values("Year").iloc[0]
-            return [film["Title"]]
+        # --- Earliest movie ≥ $1.5bn ---
+        earliest_movie_1_5bn = df[df["Gross"] >= 1_500_000_000].sort_values("Year").iloc[0]["Title"]
 
-        # --- Question 3 ---
-        elif "correlation" in query and "Rank" in query and "Peak" in query:
-            corr = df["Rank"].corr(df["Peak"])
-            return [corr]
+        # --- Correlation between Rank and Peak ---
+        corr_rank_peak = float(df["Rank"].corr(df["Peak"]))
 
-        # --- Question 4 ---
-        elif "scatterplot" in query and "Rank" in query and "Peak" in query:
-            plt.scatter(df["Rank"], df["Peak"])
-            m, b = np.polyfit(df["Rank"].dropna(), df["Peak"].dropna(), 1)
-            plt.plot(df["Rank"], m*df["Rank"] + b, linestyle="dotted", color="red")
+        # --- Scatterplot Rank vs Peak ---
+        plt.scatter(df["Rank"], df["Peak"])
+        m, b = np.polyfit(df["Rank"].dropna(), df["Peak"].dropna(), 1)
+        plt.plot(df["Rank"], m*df["Rank"]+b, linestyle="dotted", color="red")
+        buf = io.BytesIO()
+        plt.savefig(buf, format="png")
+        buf.seek(0)
+        encoded = base64.b64encode(buf.read()).decode()
+        plt.close()
+        scatterplot_base64 = f"data:image/png;base64,{encoded}"
 
-            buf = io.BytesIO()
-            plt.savefig(buf, format="png")
-            buf.seek(0)
-            encoded = base64.b64encode(buf.read()).decode()
-            plt.close()
-
-            return [f"data:image/png;base64,{encoded}"]
-
-        else:
-            raise HTTPException(status_code=400, detail="Unknown task description. Please provide a supported query.")
+        # --- Return all results in a single list ---
+        return [count_2bn_before_2000, earliest_movie_1_5bn, corr_rank_peak, scatterplot_base64]
 
     except Exception as e:
         raise HTTPException(status_code=400, detail=f"Processing error: {str(e)}")
+
 
 
 
