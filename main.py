@@ -18,6 +18,9 @@ class AnalyzeRequest(BaseModel):
 @app.get("/")
 def root():
     return {"message": "API is running. Use POST /analyze_data with your request."}
+@app.head("/")
+def root_head():
+    return {}
 
 def parse_query(query: str):
     money_match = re.search(r"\$(\d+\.?\d*)\s*B", query, re.IGNORECASE)
