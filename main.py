@@ -51,7 +51,7 @@ def analyze_data(request: AnalyzeRequest):
         
         df = tables[0]  # first table assumed relevant
 
-        # Clean numeric columns
+        # Clean numeric columns safely
         if "Worldwide gross" in df.columns:
             df["Worldwide gross"] = (
                 df["Worldwide gross"]
@@ -89,9 +89,9 @@ def analyze_data(request: AnalyzeRequest):
                 plt.close()
                 img_base64 = base64.b64encode(buf.getvalue()).decode("utf-8")
 
-        # Prepare response
-        first_title = str(filtered_df.iloc[0]["Title"]) if not filtered_df.empty and "Title" in filtered_df.columns else None
-        first_gross = str(filtered_df["Worldwide gross"].iloc[0]) if not filtered_df.empty and "Worldwide gross" in filtered_df.columns else None
+        # Prepare safe response
+        first_title = str(filtered_df.iloc[0]["Title"]) if not filtered_df.empty and "Title" in filtered_df.columns else "N/A"
+        first_gross = str(filtered_df["Worldwide gross"].iloc[0]) if not filtered_df.empty and "Worldwide gross" in filtered_df.columns else 0.0
 
         result = [
             len(filtered_df),
@@ -103,6 +103,7 @@ def analyze_data(request: AnalyzeRequest):
 
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Processing error: {str(e)}")
+
 
 
 
