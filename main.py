@@ -5,7 +5,7 @@ import numpy as np
 import matplotlib.pyplot as plt
 import seaborn as sns
 import base64
-from io import BytesIO
+from io import BytesIO, StringIO
 import requests
 import re
 
@@ -20,12 +20,6 @@ def root():
     return {"message": "API is running. Use POST /analyze_data with your request."}
 
 def parse_query(query: str):
-    """
-    Parse queries like:
-    'How many $2B movies were released before 2000?'
-    Supports: $X B, before YEAR, after YEAR
-    Returns: threshold (float in billions), year_min (int), year_max (int)
-    """
     money_match = re.search(r"\$(\d+\.?\d*)\s*B", query, re.IGNORECASE)
     before_match = re.search(r"before\s+(\d{4})", query, re.IGNORECASE)
     after_match = re.search(r"after\s+(\d{4})", query, re.IGNORECASE)
@@ -39,19 +33,19 @@ def parse_query(query: str):
 @app.post("/analyze_data")
 def analyze_data(request: AnalyzeRequest):
     try:
-        # Fetch data
-        response = requests.get(request.data_url)
+        # Fetch data with proper headers
+        response = requests.get(request.data_url, headers={"User-Agent": "Mozilla/5.0"})
         if response.status_code != 200:
             raise HTTPException(status_code=500, detail=f"Failed to fetch URL: {response.status_code}")
 
-        # Parse tables
-        tables = pd.read_html(response.text)
+        # Parse tables safely
+        tables = pd.read_html(StringIO(response.text))
         if len(tables) == 0:
             raise HTTPException(status_code=500, detail="No tables found at the URL")
         
-        df = tables[0]  # first table assumed relevant
+        df = tables[0]
 
-        # Clean numeric columns safely
+        # Clean numeric columns
         if "Worldwide gross" in df.columns:
             df["Worldwide gross"] = (
                 df["Worldwide gross"]
@@ -89,9 +83,9 @@ def analyze_data(request: AnalyzeRequest):
                 plt.close()
                 img_base64 = base64.b64encode(buf.getvalue()).decode("utf-8")
 
-        # Prepare safe response
-        first_title = str(filtered_df.iloc[0]["Title"]) if not filtered_df.empty and "Title" in filtered_df.columns else "N/A"
-        first_gross = str(filtered_df["Worldwide gross"].iloc[0]) if not filtered_df.empty and "Worldwide gross" in filtered_df.columns else 0.0
+        # Prepare response
+        first_title = str(filtered_df.iloc[0]["Title"]) if not filtered_df.empty and "Title" in filtered_df.columns else None
+        first_gross = str(filtered_df["Worldwide gross"].iloc[0]) if not filtered_df.empty and "Worldwide gross" in filtered_df.columns else None
 
         result = [
             len(filtered_df),
@@ -103,6 +97,8 @@ def analyze_data(request: AnalyzeRequest):
 
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Processing error: {str(e)}")
+
+
 
 
 
