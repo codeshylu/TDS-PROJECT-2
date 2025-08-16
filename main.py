@@ -13,21 +13,18 @@ app = FastAPI()
 
 class AnalyzeRequest(BaseModel):
     query: str
-    data_url: str  # Wikipedia URL
+    data_url: str
 
 @app.get("/")
 def root():
     return {"message": "API is running. Use POST /analyze_data with your request."}
-@app.head("/")
-def head_root():
-    return {}
-
 
 def parse_query(query: str):
     """
     Parse queries like:
     'How many $2B movies were released before 2000?'
-    Returns threshold (float in billions), year_min (int), year_max (int)
+    Supports: $X B, before YEAR, after YEAR
+    Returns: threshold (float in billions), year_min (int), year_max (int)
     """
     money_match = re.search(r"\$(\d+\.?\d*)\s*B", query, re.IGNORECASE)
     before_match = re.search(r"before\s+(\d{4})", query, re.IGNORECASE)
@@ -42,63 +39,59 @@ def parse_query(query: str):
 @app.post("/analyze_data")
 def analyze_data(request: AnalyzeRequest):
     try:
-        # Fetch data
-        response = requests.get(request.data_url)
-        if response.status_code != 200:
-            raise HTTPException(status_code=500, detail=f"Failed to fetch URL: {response.status_code}")
+        # Fetch data with User-Agent to avoid Wikipedia blocking
+        headers = {"User-Agent": "Mozilla/5.0"}
+        response = requests.get(request.data_url, headers=headers)
+        response.raise_for_status()
 
-        # Parse tables
+        # Parse HTML tables safely
         tables = pd.read_html(StringIO(response.text))
         if len(tables) == 0:
             raise HTTPException(status_code=500, detail="No tables found at the URL")
         
         df = tables[0]  # first table assumed relevant
 
-        # Clean columns
+        # Clean numeric columns
         if "Worldwide gross" in df.columns:
             df["Worldwide gross"] = (
                 df["Worldwide gross"]
-                .astype(str)
                 .replace("[\$,]", "", regex=True)
                 .apply(pd.to_numeric, errors="coerce") / 1e9
             )
         if "Year" in df.columns:
             df["Year"] = pd.to_numeric(df["Year"], errors="coerce").fillna(0).astype(int)
-        
-        if "Title" not in df.columns:
-            df["Title"] = df.iloc[:,0]  # fallback
 
-        # Parse query
+        # Parse query thresholds
         threshold, year_min, year_max = parse_query(request.query)
 
-        # Filter based on query
+        # Filter data safely
         filtered_df = df[
             (df.get("Worldwide gross", pd.Series([0]*len(df))) >= threshold) &
             (df.get("Year", pd.Series([0]*len(df))) >= year_min) &
             (df.get("Year", pd.Series([0]*len(df))) < year_max)
         ]
 
-        # Scatter plot: Rank vs Gross if available
+        # Generate scatter plot if Rank and Peak exist
         img_base64 = ""
-        if "Rank" in df.columns and "Worldwide gross" in df.columns:
-            scatter_df = df.dropna(subset=["Rank", "Worldwide gross"])
+        if "Rank" in df.columns and "Peak" in df.columns:
+            scatter_df = df.dropna(subset=["Rank", "Peak"])
             if not scatter_df.empty:
                 plt.figure(figsize=(6, 4))
-                sns.scatterplot(x="Rank", y="Worldwide gross", data=scatter_df)
+                sns.scatterplot(x="Rank", y="Peak", data=scatter_df)
                 try:
-                    m, b = np.polyfit(scatter_df["Rank"], scatter_df["Worldwide gross"], 1)
+                    m, b = np.polyfit(scatter_df["Rank"], scatter_df["Peak"], 1)
                     plt.plot(scatter_df["Rank"], m*scatter_df["Rank"] + b, linestyle="dotted", color="red")
                 except Exception:
                     pass
-                plt.title("Rank vs Worldwide Gross (in $B)")
+                plt.title("Rank vs Peak")
                 buf = BytesIO()
                 plt.savefig(buf, format="png")
                 plt.close()
                 img_base64 = base64.b64encode(buf.getvalue()).decode("utf-8")
 
         # Prepare response
-        first_title = str(filtered_df.iloc[0]["Title"]) if not filtered_df.empty else "No match"
-        first_gross = str(filtered_df["Worldwide gross"].iloc[0]) if not filtered_df.empty else "No match"
+        first_title = str(filtered_df.iloc[0]["Title"]) if not filtered_df.empty and "Title" in filtered_df.columns else "No match"
+        first_gross = str(filtered_df["Worldwide gross"].iloc[0]) if not filtered_df.empty and "Worldwide gross" in filtered_df.columns else "No match"
 
         result = [
             len(filtered_df),
@@ -108,7 +101,7 @@ def analyze_data(request: AnalyzeRequest):
         ]
         return result
 
+    except requests.HTTPError as e:
+        raise HTTPException(status_code=500, detail=f"Failed to fetch URL: {e.response.status_code}")
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Processing error: {str(e)}")
-
-
