@@ -32,7 +32,7 @@ def scrape_table(url):
 
 
 # Helper: make scatterplot and return base64
-ndef make_scatterplot(df):
+def make_scatterplot(df):
     try:
         x = pd.to_numeric(df["Rank"], errors="coerce")
         y = pd.to_numeric(df["Peak"], errors="coerce")
