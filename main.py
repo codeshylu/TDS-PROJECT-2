@@ -2,17 +2,29 @@ from fastapi import FastAPI, Request, HTTPException
 import pandas as pd
 import matplotlib.pyplot as plt
 import numpy as np
-import base64, io
+import base64
+import io
+import requests
+from bs4 import BeautifulSoup
 
 app = FastAPI()
 
 # --- Helper to scrape Wikipedia table ---
 def scrape_highest_grossing_films(url: str) -> pd.DataFrame:
     try:
-        tables = pd.read_html(url)
-        df = tables[0]  # First table is usually the highest-grossing films
+        # Fetch page content
+        response = requests.get(url)
+        if response.status_code != 200:
+            raise HTTPException(status_code=500, detail=f"Failed to fetch URL: {response.status_code}")
+
+        # Use pandas to read all tables from HTML content
+        tables = pd.read_html(response.text)
+        df = tables[0]  # Usually the first table is the main list
+
+        # Standardize column names
         df.columns = [c.strip() for c in df.columns]
 
+        # Clean numeric columns
         if "Year" in df.columns:
             df["Year"] = pd.to_numeric(df["Year"], errors="coerce")
         if "Rank" in df.columns:
@@ -28,6 +40,7 @@ def scrape_highest_grossing_films(url: str) -> pd.DataFrame:
                 .replace(r"m", "000000", regex=True)
             )
             df["Gross"] = pd.to_numeric(df["Gross"], errors="coerce")
+
         return df
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Scraping failed: {str(e)}")
@@ -63,11 +76,13 @@ async def analyze_data(request: Request):
             plt.scatter(df["Rank"], df["Peak"])
             m, b = np.polyfit(df["Rank"].dropna(), df["Peak"].dropna(), 1)
             plt.plot(df["Rank"], m*df["Rank"]+b, linestyle="dotted", color="red")
+
             buf = io.BytesIO()
             plt.savefig(buf, format="png")
             buf.seek(0)
             encoded = base64.b64encode(buf.read()).decode()
             plt.close()
+
             answer = [f"data:image/png;base64,{encoded}"]
             return answer
 
