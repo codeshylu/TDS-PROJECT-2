@@ -31,7 +31,7 @@ def analyze_data(request: AnalyzeRequest):
         if len(tables) == 0:
             raise HTTPException(status_code=500, detail="No tables found at the URL")
         
-        df = tables[0]  # Assuming the first table is the relevant one
+        df = tables[0]  # Assuming the first table is relevant
 
         # Convert relevant columns to numeric safely
         if "Worldwide gross" in df.columns:
@@ -43,8 +43,11 @@ def analyze_data(request: AnalyzeRequest):
         if "Year" in df.columns:
             df["Year"] = pd.to_numeric(df["Year"], errors="coerce").fillna(0).astype(int)
 
-        # Example filter: movies over $2B before 2000
-        filtered_df = df[(df.get("Worldwide gross", 0) >= 2) & (df.get("Year", 0) < 2000)]
+        # Safe filtering for query example: movies over $2B before 2000
+        filtered_df = df[
+            (df.get("Worldwide gross", pd.Series([0]*len(df))) >= 2) &
+            (df.get("Year", pd.Series([0]*len(df))) < 2000)
+        ]
 
         # Prepare scatter plot safely
         img_base64 = ""
@@ -65,11 +68,14 @@ def analyze_data(request: AnalyzeRequest):
                 img_base64 = base64.b64encode(buf.getvalue()).decode("utf-8")
 
         # Prepare response safely
+        first_title = str(filtered_df.iloc[0]["Title"]) if not filtered_df.empty and "Title" in filtered_df.columns else None
+        first_gross = str(filtered_df["Worldwide gross"].iloc[0]) if not filtered_df.empty and "Worldwide gross" in filtered_df.columns else None
+
         result = [
             len(filtered_df),
-            str(filtered_df.iloc[0]["Title"]) if not filtered_df.empty else None,
-            str(filtered_df["Worldwide gross"].iloc[0]) if not filtered_df.empty else None,
-            f"data:image/png;base64,{img_base64}"
+            first_title,
+            first_gross,
+            f"data:image/png;base64,{img_base64}" if img_base64 else None
         ]
         return result
 
