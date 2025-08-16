@@ -7,6 +7,7 @@ import seaborn as sns
 import base64
 from io import BytesIO
 import requests
+import re
 
 app = FastAPI()
 
@@ -18,6 +19,23 @@ class AnalyzeRequest(BaseModel):
 def root():
     return {"message": "API is running. Use POST /analyze_data with your request."}
 
+def parse_query(query: str):
+    """
+    Parse queries like:
+    'How many $2B movies were released before 2000?'
+    Supports: $X B, before YEAR, after YEAR
+    Returns: threshold (float in billions), year_min (int), year_max (int)
+    """
+    money_match = re.search(r"\$(\d+\.?\d*)\s*B", query, re.IGNORECASE)
+    before_match = re.search(r"before\s+(\d{4})", query, re.IGNORECASE)
+    after_match = re.search(r"after\s+(\d{4})", query, re.IGNORECASE)
+    
+    threshold = float(money_match.group(1)) if money_match else 0
+    year_max = int(before_match.group(1)) if before_match else 9999
+    year_min = int(after_match.group(1)) if after_match else 0
+    
+    return threshold, year_min, year_max
+
 @app.post("/analyze_data")
 def analyze_data(request: AnalyzeRequest):
     try:
@@ -26,14 +44,14 @@ def analyze_data(request: AnalyzeRequest):
         if response.status_code != 200:
             raise HTTPException(status_code=500, detail=f"Failed to fetch URL: {response.status_code}")
 
-        # Parse tables using pandas
+        # Parse tables
         tables = pd.read_html(response.text)
         if len(tables) == 0:
             raise HTTPException(status_code=500, detail="No tables found at the URL")
         
-        df = tables[0]  # Assuming the first table is relevant
+        df = tables[0]  # first table assumed relevant
 
-        # Convert relevant columns to numeric safely
+        # Clean numeric columns
         if "Worldwide gross" in df.columns:
             df["Worldwide gross"] = (
                 df["Worldwide gross"]
@@ -43,13 +61,17 @@ def analyze_data(request: AnalyzeRequest):
         if "Year" in df.columns:
             df["Year"] = pd.to_numeric(df["Year"], errors="coerce").fillna(0).astype(int)
 
-        # Safe filtering for query example: movies over $2B before 2000
+        # Parse query
+        threshold, year_min, year_max = parse_query(request.query)
+
+        # Filter safely
         filtered_df = df[
-            (df.get("Worldwide gross", pd.Series([0]*len(df))) >= 2) &
-            (df.get("Year", pd.Series([0]*len(df))) < 2000)
+            (df.get("Worldwide gross", pd.Series([0]*len(df))) >= threshold) &
+            (df.get("Year", pd.Series([0]*len(df))) >= year_min) &
+            (df.get("Year", pd.Series([0]*len(df))) < year_max)
         ]
 
-        # Prepare scatter plot safely
+        # Scatter plot if data available
         img_base64 = ""
         if "Rank" in df.columns and "Peak" in df.columns:
             scatter_df = df.dropna(subset=["Rank", "Peak"])
@@ -67,7 +89,7 @@ def analyze_data(request: AnalyzeRequest):
                 plt.close()
                 img_base64 = base64.b64encode(buf.getvalue()).decode("utf-8")
 
-        # Prepare response safely
+        # Prepare response
         first_title = str(filtered_df.iloc[0]["Title"]) if not filtered_df.empty and "Title" in filtered_df.columns else None
         first_gross = str(filtered_df["Worldwide gross"].iloc[0]) if not filtered_df.empty and "Worldwide gross" in filtered_df.columns else None
 
@@ -81,6 +103,7 @@ def analyze_data(request: AnalyzeRequest):
 
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Processing error: {str(e)}")
+
 
 
 
