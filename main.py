@@ -5,7 +5,7 @@ import numpy as np
 import matplotlib.pyplot as plt
 import seaborn as sns
 import base64
-from io import BytesIO
+from io import BytesIO, StringIO
 import requests
 import re
 
@@ -20,7 +20,11 @@ def root():
     return {"message": "API is running. Use POST /analyze_data with your request."}
 
 def parse_query(query: str):
-    """Parse queries like '$2B movies before 2000'."""
+    """
+    Parse queries like:
+    'How many $2B movies were released before 2000?'
+    Returns threshold (float in billions), year_min (int), year_max (int)
+    """
     money_match = re.search(r"\$(\d+\.?\d*)\s*B", query, re.IGNORECASE)
     before_match = re.search(r"before\s+(\d{4})", query, re.IGNORECASE)
     after_match = re.search(r"after\s+(\d{4})", query, re.IGNORECASE)
@@ -34,59 +38,63 @@ def parse_query(query: str):
 @app.post("/analyze_data")
 def analyze_data(request: AnalyzeRequest):
     try:
+        # Fetch data
         response = requests.get(request.data_url)
         if response.status_code != 200:
             raise HTTPException(status_code=500, detail=f"Failed to fetch URL: {response.status_code}")
 
         # Parse tables
-        tables = pd.read_html(response.text)
+        tables = pd.read_html(StringIO(response.text))
         if len(tables) == 0:
             raise HTTPException(status_code=500, detail="No tables found at the URL")
         
-        df = tables[0]  # First table assumed relevant
+        df = tables[0]  # first table assumed relevant
 
-        # Clean numeric columns
+        # Clean columns
         if "Worldwide gross" in df.columns:
             df["Worldwide gross"] = (
                 df["Worldwide gross"]
                 .astype(str)
-                .str.replace(r"[\$,]", "", regex=True)
+                .replace("[\$,]", "", regex=True)
                 .apply(pd.to_numeric, errors="coerce") / 1e9
             )
         if "Year" in df.columns:
             df["Year"] = pd.to_numeric(df["Year"], errors="coerce").fillna(0).astype(int)
+        
+        if "Title" not in df.columns:
+            df["Title"] = df.iloc[:,0]  # fallback
 
         # Parse query
         threshold, year_min, year_max = parse_query(request.query)
 
-        # Filter DataFrame
+        # Filter based on query
         filtered_df = df[
             (df.get("Worldwide gross", pd.Series([0]*len(df))) >= threshold) &
             (df.get("Year", pd.Series([0]*len(df))) >= year_min) &
             (df.get("Year", pd.Series([0]*len(df))) < year_max)
         ]
 
-        # Prepare scatter plot if Rank and Peak exist
+        # Scatter plot: Rank vs Gross if available
         img_base64 = ""
-        if "Rank" in df.columns and "Peak" in df.columns:
-            scatter_df = df.dropna(subset=["Rank", "Peak"])
+        if "Rank" in df.columns and "Worldwide gross" in df.columns:
+            scatter_df = df.dropna(subset=["Rank", "Worldwide gross"])
             if not scatter_df.empty:
-                plt.figure(figsize=(6,4))
-                sns.scatterplot(x="Rank", y="Peak", data=scatter_df)
+                plt.figure(figsize=(6, 4))
+                sns.scatterplot(x="Rank", y="Worldwide gross", data=scatter_df)
                 try:
-                    m, b = np.polyfit(scatter_df["Rank"], scatter_df["Peak"], 1)
+                    m, b = np.polyfit(scatter_df["Rank"], scatter_df["Worldwide gross"], 1)
                     plt.plot(scatter_df["Rank"], m*scatter_df["Rank"] + b, linestyle="dotted", color="red")
                 except Exception:
                     pass
-                plt.title("Rank vs Peak")
+                plt.title("Rank vs Worldwide Gross (in $B)")
                 buf = BytesIO()
                 plt.savefig(buf, format="png")
                 plt.close()
                 img_base64 = base64.b64encode(buf.getvalue()).decode("utf-8")
 
-        # Prepare response safely
-        first_title = filtered_df.iloc[0]["Title"] if not filtered_df.empty and "Title" in filtered_df.columns else "No match"
-        first_gross = filtered_df.iloc[0]["Worldwide gross"] if not filtered_df.empty and "Worldwide gross" in filtered_df.columns else "No match"
+        # Prepare response
+        first_title = str(filtered_df.iloc[0]["Title"]) if not filtered_df.empty else "No match"
+        first_gross = str(filtered_df["Worldwide gross"].iloc[0]) if not filtered_df.empty else "No match"
 
         result = [
             len(filtered_df),
@@ -98,4 +106,5 @@ def analyze_data(request: AnalyzeRequest):
 
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Processing error: {str(e)}")
+
 
