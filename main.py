@@ -7,13 +7,16 @@ import seaborn as sns
 import base64
 from io import BytesIO
 import requests
-from bs4 import BeautifulSoup
 
 app = FastAPI()
 
 class AnalyzeRequest(BaseModel):
     query: str
     data_url: str
+
+@app.get("/")
+def root():
+    return {"message": "API is running. Use POST /analyze_data with your request."}
 
 @app.post("/analyze_data")
 def analyze_data(request: AnalyzeRequest):
@@ -32,43 +35,47 @@ def analyze_data(request: AnalyzeRequest):
 
         # Convert relevant columns to numeric safely
         if "Worldwide gross" in df.columns:
-            df["Worldwide gross"] = pd.to_numeric(
-                df["Worldwide gross"].replace("[\$,]", "", regex=True), errors="coerce"
-            ) / 1e9  # Convert to billions
+            df["Worldwide gross"] = (
+                df["Worldwide gross"]
+                .replace("[\$,]", "", regex=True)
+                .apply(pd.to_numeric, errors="coerce") / 1e9
+            )
         if "Year" in df.columns:
-            df["Year"] = pd.to_numeric(df["Year"], errors="coerce").astype('Int64')
+            df["Year"] = pd.to_numeric(df["Year"], errors="coerce").fillna(0).astype(int)
 
-        # Filter based on query (example: movies over $2B before 2000)
-        filtered_df = df[(df["Worldwide gross"] >= 2) & (df["Year"] < 2000)]
+        # Example filter: movies over $2B before 2000
+        filtered_df = df[(df.get("Worldwide gross", 0) >= 2) & (df.get("Year", 0) < 2000)]
 
         # Prepare scatter plot safely
+        img_base64 = ""
         if "Rank" in df.columns and "Peak" in df.columns:
             scatter_df = df.dropna(subset=["Rank", "Peak"])
-            plt.figure(figsize=(6, 4))
-            sns.scatterplot(x="Rank", y="Peak", data=scatter_df)
             if not scatter_df.empty:
-                m, b = np.polyfit(scatter_df["Rank"], scatter_df["Peak"], 1)
-                plt.plot(scatter_df["Rank"], m*scatter_df["Rank"] + b, linestyle="dotted", color="red")
-            plt.title("Rank vs Peak")
-            
-            buf = BytesIO()
-            plt.savefig(buf, format="png")
-            plt.close()
-            img_base64 = base64.b64encode(buf.getvalue()).decode("utf-8")
-        else:
-            img_base64 = ""
+                plt.figure(figsize=(6, 4))
+                sns.scatterplot(x="Rank", y="Peak", data=scatter_df)
+                try:
+                    m, b = np.polyfit(scatter_df["Rank"], scatter_df["Peak"], 1)
+                    plt.plot(scatter_df["Rank"], m*scatter_df["Rank"] + b, linestyle="dotted", color="red")
+                except Exception:
+                    pass
+                plt.title("Rank vs Peak")
+                buf = BytesIO()
+                plt.savefig(buf, format="png")
+                plt.close()
+                img_base64 = base64.b64encode(buf.getvalue()).decode("utf-8")
 
-        # Prepare response
+        # Prepare response safely
         result = [
             len(filtered_df),
-            filtered_df.iloc[0]["Title"] if not filtered_df.empty else None,
-            filtered_df["Worldwide gross"].iloc[0] if not filtered_df.empty else None,
+            str(filtered_df.iloc[0]["Title"]) if not filtered_df.empty else None,
+            str(filtered_df["Worldwide gross"].iloc[0]) if not filtered_df.empty else None,
             f"data:image/png;base64,{img_base64}"
         ]
         return result
 
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Processing error: {str(e)}")
+
 
 
 
