@@ -29,12 +29,14 @@ def analyze_data(request: AnalyzeRequest):
             raise HTTPException(status_code=500, detail="No tables found at the URL")
         
         df = tables[0]  # Assuming the first table is the relevant one
-        
-        # Example: convert relevant columns to numeric
+
+        # Convert relevant columns to numeric safely
         if "Worldwide gross" in df.columns:
-            df["Worldwide gross"] = df["Worldwide gross"].replace("[\$,]", "", regex=True).astype(float) / 1e9
+            df["Worldwide gross"] = pd.to_numeric(
+                df["Worldwide gross"].replace("[\$,]", "", regex=True), errors="coerce"
+            ) / 1e9  # Convert to billions
         if "Year" in df.columns:
-            df["Year"] = df["Year"].astype(int)
+            df["Year"] = pd.to_numeric(df["Year"], errors="coerce").astype('Int64')
 
         # Filter based on query (example: movies over $2B before 2000)
         filtered_df = df[(df["Worldwide gross"] >= 2) & (df["Year"] < 2000)]
@@ -44,8 +46,9 @@ def analyze_data(request: AnalyzeRequest):
             scatter_df = df.dropna(subset=["Rank", "Peak"])
             plt.figure(figsize=(6, 4))
             sns.scatterplot(x="Rank", y="Peak", data=scatter_df)
-            m, b = np.polyfit(scatter_df["Rank"], scatter_df["Peak"], 1)
-            plt.plot(scatter_df["Rank"], m*scatter_df["Rank"] + b, linestyle="dotted", color="red")
+            if not scatter_df.empty:
+                m, b = np.polyfit(scatter_df["Rank"], scatter_df["Peak"], 1)
+                plt.plot(scatter_df["Rank"], m*scatter_df["Rank"] + b, linestyle="dotted", color="red")
             plt.title("Rank vs Peak")
             
             buf = BytesIO()
@@ -55,7 +58,7 @@ def analyze_data(request: AnalyzeRequest):
         else:
             img_base64 = ""
 
-        # Example response format
+        # Prepare response
         result = [
             len(filtered_df),
             filtered_df.iloc[0]["Title"] if not filtered_df.empty else None,
@@ -66,6 +69,7 @@ def analyze_data(request: AnalyzeRequest):
 
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Processing error: {str(e)}")
+
 
 
 
