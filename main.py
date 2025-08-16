@@ -1,80 +1,94 @@
-from fastapi import FastAPI, HTTPException
-from pydantic import BaseModel
+from fastapi import FastAPI, Request, HTTPException
 import pandas as pd
-import requests
-from bs4 import BeautifulSoup
 import matplotlib.pyplot as plt
-import base64
-import io
+import base64, io, re
+import numpy as np
 
 app = FastAPI()
 
-class QueryRequest(BaseModel):
-    query: str
-    data_url: str = None  # optional, only needed for scrape task
+# --- Helper to scrape Wikipedia table ---
+def scrape_highest_grossing_films(url: str) -> pd.DataFrame:
+    try:
+        tables = pd.read_html(url)
+        # First table on the page is usually the "Highest-grossing films"
+        df = tables[0]
 
-# ---- Helper: scrape Wikipedia table ----
-def scrape_wikipedia(url: str):
-    tables = pd.read_html(url)
-    df = tables[0]  # first table = highest-grossing films
-    # Ensure consistent columns
-    df = df.rename(columns={df.columns[0]: "Title", df.columns[1]: "Year", df.columns[2]: "Worldwide gross"})
-    # Clean gross column
-    df["Worldwide gross"] = (
-        df["Worldwide gross"].replace(r"[\$,]", "", regex=True).astype(float) / 1e9
-    )
-    return df
+        # Standardize column names
+        df.columns = [c.strip() for c in df.columns]
 
-# ---- Helper: create chart and return base64 ----
-def make_chart(df, title="Top Movies"):
-    plt.figure(figsize=(8, 5))
-    plt.bar(df["Title"], df["Worldwide gross"])
-    plt.xticks(rotation=45, ha="right")
-    plt.ylabel("Gross (in $ billions)")
-    plt.title(title)
-    buf = io.BytesIO()
-    plt.tight_layout()
-    plt.savefig(buf, format="png")
-    plt.close()
-    buf.seek(0)
-    return base64.b64encode(buf.read()).decode("utf-8")
+        # Clean Year column
+        if "Year" in df.columns:
+            df["Year"] = pd.to_numeric(df["Year"], errors="coerce")
 
-@app.post("/")
-def handle_query(request: QueryRequest):
-    query = request.query.lower()
+        # Clean Rank and Peak columns
+        if "Rank" in df.columns:
+            df["Rank"] = pd.to_numeric(df["Rank"], errors="coerce")
+        if "Peak" in df.columns:
+            df["Peak"] = pd.to_numeric(df["Peak"], errors="coerce")
 
-    # ---- Case 1: Scrape highest grossing films ----
-    if "scrape" in query and "highest grossing films" in query:
-        if not request.data_url:
-            raise HTTPException(status_code=400, detail="Missing data_url for scrape task")
+        # Clean Worldwide gross (remove $ , bn , m)
+        if "Worldwide gross" in df.columns:
+            df["Gross"] = (
+                df["Worldwide gross"]
+                .astype(str)
+                .replace(r"[\$,]", "", regex=True)
+                .replace(r"bn", "000000000", regex=True)
+                .replace(r"m", "000000", regex=True)
+            )
+            df["Gross"] = pd.to_numeric(df["Gross"], errors="coerce")
 
-        df = scrape_wikipedia(request.data_url)
-        chart = make_chart(df.head(10), "Top 10 Grossing Films")
+        return df
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Scraping failed: {str(e)}")
 
-        # Format response as: [index, title, gross, chart]
-        response = []
-        for idx, row in df.head(10).iterrows():
-            response.append([idx, row["Title"], round(row["Worldwide gross"], 6), f"data:image/png;base64,{chart}"])
-        return response
 
-    # ---- Case 2: Count $2bn movies before 2000 ----
-    elif "$2 bn" in query and "before 2000" in query:
-        if not request.data_url:
-            raise HTTPException(status_code=400, detail="Missing data_url for scrape task")
+@app.post("/analyze_data")
+async def analyze_data(request: Request):
+    try:
+        body = await request.json()
+        query = body.get("query", "")
+        data_url = body.get("data_url", "https://en.wikipedia.org/wiki/List_of_highest-grossing_films")
 
-        df = scrape_wikipedia(request.data_url)
-        df["Year"] = pd.to_numeric(df["Year"], errors="coerce")
+        df = scrape_highest_grossing_films(data_url)
 
-        filtered = df[(df["Worldwide gross"] >= 2.0) & (df["Year"] < 2000)]
-        chart = make_chart(filtered, "$2bn Movies before 2000")
+        # --- Question 1 ---
+        if "2 bn" in query and "before 2000" in query:
+            answer = [str(len(df[(df["Gross"] >= 2_000_000_000) & (df["Year"] < 2000)]))]
+            return answer
 
-        response = []
-        for idx, row in filtered.iterrows():
-            response.append([idx, row["Title"], round(row["Worldwide gross"], 6), f"data:image/png;base64,{chart}"])
-        return response
+        # --- Question 2 ---
+        elif "earliest" in query and "1.5 bn" in query:
+            film = df[df["Gross"] >= 1_500_000_000].sort_values("Year").iloc[0]
+            answer = [str(film["Title"])]
+            return answer
 
-    else:
-        raise HTTPException(status_code=400, detail="Unknown task description. Please provide a supported query.")
+        # --- Question 3 ---
+        elif "correlation" in query and "Rank" in query and "Peak" in query:
+            corr = df["Rank"].corr(df["Peak"])
+            answer = [str(corr)]
+            return answer
+
+        # --- Question 4 ---
+        elif "scatterplot" in query and "Rank" in query and "Peak" in query:
+            plt.scatter(df["Rank"], df["Peak"])
+            m, b = np.polyfit(df["Rank"].dropna(), df["Peak"].dropna(), 1)
+            plt.plot(df["Rank"], m*df["Rank"]+b, linestyle="dotted", color="red")
+
+            buf = io.BytesIO()
+            plt.savefig(buf, format="png")
+            buf.seek(0)
+            encoded = base64.b64encode(buf.read()).decode()
+            plt.close()
+
+            answer = [f"data:image/png;base64,{encoded}"]
+            return answer
+
+        else:
+            raise HTTPException(status_code=400, detail="Unknown task description. Please provide a supported query.")
+
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=f"Processing error: {str(e)}")
+
 
 
 
