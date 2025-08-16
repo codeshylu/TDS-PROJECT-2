@@ -18,6 +18,10 @@ class AnalyzeRequest(BaseModel):
 @app.get("/")
 def root():
     return {"message": "API is running. Use POST /analyze_data with your request."}
+@app.head("/")
+def head_root():
+    return {}
+
 
 def parse_query(query: str):
     """
