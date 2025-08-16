@@ -1,86 +1,72 @@
-from fastapi import FastAPI, Request, HTTPException
+from fastapi import FastAPI, HTTPException
+from pydantic import BaseModel
 import pandas as pd
-import matplotlib.pyplot as plt
-import base64, io, re
 import numpy as np
-from bs4 import BeautifulSoup
+import matplotlib.pyplot as plt
+import seaborn as sns
+import base64
+from io import BytesIO
 import requests
+from bs4 import BeautifulSoup
 
 app = FastAPI()
 
-# --- Helper to scrape Wikipedia table ---
-def scrape_highest_grossing_films(url: str) -> pd.DataFrame:
-    try:
-        # Use requests + BeautifulSoup to fetch page content
-        response = requests.get(url)
-        if response.status_code != 200:
-            raise HTTPException(status_code=500, detail=f"Failed to fetch URL: {response.status_code}")
-        tables = pd.read_html(response.text)
-        df = tables[0]
-
-        # Standardize column names
-        df.columns = [c.strip() for c in df.columns]
-
-        # Clean Year column
-        if "Year" in df.columns:
-            df["Year"] = pd.to_numeric(df["Year"], errors="coerce")
-
-        # Clean Rank and Peak columns
-        if "Rank" in df.columns:
-            df["Rank"] = pd.to_numeric(df["Rank"], errors="coerce")
-        if "Peak" in df.columns:
-            df["Peak"] = pd.to_numeric(df["Peak"], errors="coerce")
-
-        # Clean Worldwide gross (remove $ , bn , m)
-        if "Worldwide gross" in df.columns:
-            df["Gross"] = (
-                df["Worldwide gross"]
-                .astype(str)
-                .replace(r"[\$,]", "", regex=True)
-                .replace(r"bn", "000000000", regex=True)
-                .replace(r"m", "000000", regex=True)
-            )
-            df["Gross"] = pd.to_numeric(df["Gross"], errors="coerce")
-
-        return df
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Scraping failed: {str(e)}")
-
+class AnalyzeRequest(BaseModel):
+    query: str
+    data_url: str
 
 @app.post("/analyze_data")
-async def analyze_data(request: Request):
+def analyze_data(request: AnalyzeRequest):
     try:
-        body = await request.json()
-        query = body.get("query", "")
-        data_url = body.get("data_url", "https://en.wikipedia.org/wiki/List_of_highest-grossing_films")
+        # Fetch data
+        response = requests.get(request.data_url)
+        if response.status_code != 200:
+            raise HTTPException(status_code=500, detail=f"Failed to fetch URL: {response.status_code}")
 
-        df = scrape_highest_grossing_films(data_url)
+        # Parse tables using pandas
+        tables = pd.read_html(response.text)
+        if len(tables) == 0:
+            raise HTTPException(status_code=500, detail="No tables found at the URL")
+        
+        df = tables[0]  # Assuming the first table is the relevant one
+        
+        # Example: convert relevant columns to numeric
+        if "Worldwide gross" in df.columns:
+            df["Worldwide gross"] = df["Worldwide gross"].replace("[\$,]", "", regex=True).astype(float) / 1e9
+        if "Year" in df.columns:
+            df["Year"] = df["Year"].astype(int)
 
-        # --- Count of movies ≥ $2bn before 2000 ---
-        count_2bn_before_2000 = int(len(df[(df["Gross"] >= 2_000_000_000) & (df["Year"] < 2000)]))
+        # Filter based on query (example: movies over $2B before 2000)
+        filtered_df = df[(df["Worldwide gross"] >= 2) & (df["Year"] < 2000)]
 
-        # --- Earliest movie ≥ $1.5bn ---
-        earliest_movie_1_5bn = df[df["Gross"] >= 1_500_000_000].sort_values("Year").iloc[0]["Title"]
+        # Prepare scatter plot safely
+        if "Rank" in df.columns and "Peak" in df.columns:
+            scatter_df = df.dropna(subset=["Rank", "Peak"])
+            plt.figure(figsize=(6, 4))
+            sns.scatterplot(x="Rank", y="Peak", data=scatter_df)
+            m, b = np.polyfit(scatter_df["Rank"], scatter_df["Peak"], 1)
+            plt.plot(scatter_df["Rank"], m*scatter_df["Rank"] + b, linestyle="dotted", color="red")
+            plt.title("Rank vs Peak")
+            
+            buf = BytesIO()
+            plt.savefig(buf, format="png")
+            plt.close()
+            img_base64 = base64.b64encode(buf.getvalue()).decode("utf-8")
+        else:
+            img_base64 = ""
 
-        # --- Correlation between Rank and Peak ---
-        corr_rank_peak = float(df["Rank"].corr(df["Peak"]))
-
-        # --- Scatterplot Rank vs Peak ---
-        plt.scatter(df["Rank"], df["Peak"])
-        m, b = np.polyfit(df["Rank"].dropna(), df["Peak"].dropna(), 1)
-        plt.plot(df["Rank"], m*df["Rank"]+b, linestyle="dotted", color="red")
-        buf = io.BytesIO()
-        plt.savefig(buf, format="png")
-        buf.seek(0)
-        encoded = base64.b64encode(buf.read()).decode()
-        plt.close()
-        scatterplot_base64 = f"data:image/png;base64,{encoded}"
-
-        # --- Return all results in a single list ---
-        return [count_2bn_before_2000, earliest_movie_1_5bn, corr_rank_peak, scatterplot_base64]
+        # Example response format
+        result = [
+            len(filtered_df),
+            filtered_df.iloc[0]["Title"] if not filtered_df.empty else None,
+            filtered_df["Worldwide gross"].iloc[0] if not filtered_df.empty else None,
+            f"data:image/png;base64,{img_base64}"
+        ]
+        return result
 
     except Exception as e:
-        raise HTTPException(status_code=400, detail=f"Processing error: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Processing error: {str(e)}")
+
 
 
 
