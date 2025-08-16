@@ -1,9 +1,8 @@
 from fastapi import FastAPI, Request, HTTPException
 import pandas as pd
 import matplotlib.pyplot as plt
+import base64, io, re
 import numpy as np
-import base64
-import io
 import requests
 from bs4 import BeautifulSoup
 
@@ -12,25 +11,27 @@ app = FastAPI()
 # --- Helper to scrape Wikipedia table ---
 def scrape_highest_grossing_films(url: str) -> pd.DataFrame:
     try:
-        # Fetch page content
-        response = requests.get(url)
-        if response.status_code != 200:
-            raise HTTPException(status_code=500, detail=f"Failed to fetch URL: {response.status_code}")
+        headers = {"User-Agent": "Mozilla/5.0"}
+        res = requests.get(url, headers=headers)
+        res.raise_for_status()
 
-        # Use pandas to read all tables from HTML content
-        tables = pd.read_html(response.text)
-        df = tables[0]  # Usually the first table is the main list
+        tables = pd.read_html(res.text)
+        df = tables[0]  # usually the first table
 
         # Standardize column names
         df.columns = [c.strip() for c in df.columns]
 
-        # Clean numeric columns
+        # Clean Year column
         if "Year" in df.columns:
             df["Year"] = pd.to_numeric(df["Year"], errors="coerce")
+
+        # Clean Rank and Peak columns
         if "Rank" in df.columns:
             df["Rank"] = pd.to_numeric(df["Rank"], errors="coerce")
         if "Peak" in df.columns:
             df["Peak"] = pd.to_numeric(df["Peak"], errors="coerce")
+
+        # Clean Worldwide gross (remove $ , bn , m)
         if "Worldwide gross" in df.columns:
             df["Gross"] = (
                 df["Worldwide gross"]
@@ -42,8 +43,11 @@ def scrape_highest_grossing_films(url: str) -> pd.DataFrame:
             df["Gross"] = pd.to_numeric(df["Gross"], errors="coerce")
 
         return df
+    except requests.HTTPError as e:
+        raise HTTPException(status_code=500, detail=f"Failed to fetch URL: {e.response.status_code}")
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Scraping failed: {str(e)}")
+
 
 @app.post("/analyze_data")
 async def analyze_data(request: Request):
@@ -90,6 +94,8 @@ async def analyze_data(request: Request):
             raise HTTPException(status_code=400, detail="Unknown task description. Please provide a supported query.")
 
     except Exception as e:
+        raise HTTPException(status_code=400, detail=f"Processing error: {str(e)}")
+
         raise HTTPException(status_code=400, detail=f"Processing error: {str(e)}")
 
 
