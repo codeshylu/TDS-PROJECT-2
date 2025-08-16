@@ -1,7 +1,7 @@
 from fastapi import FastAPI, Request, HTTPException
 import pandas as pd
 import matplotlib.pyplot as plt
-import base64, io, re
+import base64, io
 import numpy as np
 import requests
 from bs4 import BeautifulSoup
@@ -11,11 +11,13 @@ app = FastAPI()
 # --- Helper to scrape Wikipedia table ---
 def scrape_highest_grossing_films(url: str) -> pd.DataFrame:
     try:
-        headers = {"User-Agent": "Mozilla/5.0"}
-        res = requests.get(url, headers=headers)
-        res.raise_for_status()
+        # Check if URL is reachable
+        response = requests.get(url)
+        if response.status_code != 200:
+            raise HTTPException(status_code=500, detail=f"Failed to fetch URL: {response.status_code}")
 
-        tables = pd.read_html(res.text)
+        # Use pandas to read all tables
+        tables = pd.read_html(response.text)
         df = tables[0]  # usually the first table
 
         # Standardize column names
@@ -31,7 +33,7 @@ def scrape_highest_grossing_films(url: str) -> pd.DataFrame:
         if "Peak" in df.columns:
             df["Peak"] = pd.to_numeric(df["Peak"], errors="coerce")
 
-        # Clean Worldwide gross (remove $ , bn , m)
+        # Clean Worldwide gross
         if "Worldwide gross" in df.columns:
             df["Gross"] = (
                 df["Worldwide gross"]
@@ -43,8 +45,6 @@ def scrape_highest_grossing_films(url: str) -> pd.DataFrame:
             df["Gross"] = pd.to_numeric(df["Gross"], errors="coerce")
 
         return df
-    except requests.HTTPError as e:
-        raise HTTPException(status_code=500, detail=f"Failed to fetch URL: {e.response.status_code}")
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Scraping failed: {str(e)}")
 
@@ -94,8 +94,6 @@ async def analyze_data(request: Request):
             raise HTTPException(status_code=400, detail="Unknown task description. Please provide a supported query.")
 
     except Exception as e:
-        raise HTTPException(status_code=400, detail=f"Processing error: {str(e)}")
-
         raise HTTPException(status_code=400, detail=f"Processing error: {str(e)}")
 
 
